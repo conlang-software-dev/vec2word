@@ -1,63 +1,90 @@
 import sys
+import random
+import numpy as np
+from functools import reduce
+from itertools import product
 from gensim.models import KeyedVectors
 from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
 from collections import defaultdict
 
-segments = [a.split(',') for a in sys.argv[2:]]
+def select(k, n):
+    value = list(range(k))
+    rest = dict()
+    for i in range(k):
+        j = random.randrange(i, n)
+        if j < k:
+            # Both elements to be swapped are in the selection
+            value[i], value[j] = value[j], value[i]
+        elif j in rest:
+            # Element j has been swapped before
+            value[i], rest[j] = rest[j], value[i]
+        else:
+            # The value at j is still j, we now add it to the virtual array
+            rest[j] = value[i]
+            value[i] = j
+    return value
+
+cluster_size = 0
+try:
+    cluster_size = int(sys.argv[2])
+except:
+    pass
+
+segments = [a.split(',') for a in sys.argv[(2 if cluster_size == 0 else 3):]]
 dims = [len(a) for a in segments]
 D = len(dims)
+K = reduce(lambda a,b: a*b, dims)
 
-s_order = sorted(range(D), key=lambda n: dims[n])
-slot_sizes = [0]*D
-for k, s in enumerate(s_order):
-	slot_sizes[s] = k
+d_order = np.lexsort((dims,))
+print(dims)
+print(d_order)
 
 model_file = sys.argv[1]
 wv = KeyedVectors.load_word2vec_format(model_file, binary=(model_file.endswith('.bin')))
+
+sample_count = K*50
+vector_count = len(wv.vectors)
+if sample_count > vector_count:
+    sample_count = vector_count
+
+print("Using", sample_count, "of", vector_count, "vectors for clustering")
+samples = [wv.vectors[i,:] for i in select(sample_count, vector_count)]
+
+km = KMeans(n_clusters=K)
+km.fit(wv.vectors)
+centers = km.cluster_centers_
+print("Got Centers")
+
 pca = PCA(n_components=D)
-result = pca.fit_transform(wv.vectors)
+result = pca.fit_transform(centers)
+r_order = np.lexsort((result[:,d_order]).T)
+print("Sorted Centers")
 
-# indexes of feature columns from smallest variance to largest
-# c_order[slot_sizes[slot]] gives the index of the column to
-# reference for a given output slot.
-c_order = list(range(D))
-c_order.reverse()
+labels2words = defaultdict(list)
+if cluster_size == 0:
+    labels = km.predict(wv.vectors)
+    for i, l in enumerate(labels):
+        labels2words[l].append(wv.index_to_key[i])
+    print("Labelled all vectors")
 
-buckets = []
-for slot in range(D):
-	size = slot_sizes[slot]
-	c = c_order[slot_sizes[slot]]
-	col = result[:,c]
+print("Forms:", K)
 
-	# how should we bucket that column's values?
-	divisions = dims[slot]
-	l = len(col) - 1
-	vals = sorted(col)
-	buckets.append([vals[round((i+1)*l/divisions)] for i in range(divisions)])
-
-groups = defaultdict(list)
-
-for word, i in wv.key_to_index.items():
-	features = result[i,:] # get row
-	form = ""
-	for slot, slot_segments in enumerate(segments):
-		c = c_order[slot_sizes[slot]]
-		f = features[c] # get column
-		b = buckets[slot]
-		# determine what bucket this value falls in
-		k = 0
-		while f > b[k]:
-			k += 1
-		form += slot_segments[k]
-	groups[form].append(word)
-
-print("Forms:", len(groups))
-
-for k, v in groups.items():
-	print(k, len(v))
-	for word in sorted(v):
-		try:
-			print('\t', word)
-		except:
-			pass
-	print('==========')
+for i, emes in enumerate(product(*segments)):
+    center = centers[r_order[i],:]
+    if cluster_size == 0:
+        v1, v2 = wv.most_similar(positive=[center], topn=2)
+        word = v1[0] if v1[0] is not None else v2[0]
+        label = r_order[i]
+        cluster = labels2words[label]
+    else:
+        cluster = [r[0] for r in wv.most_similar(positive=[center], topn=cluster_size)]
+        word = cluster[0] if cluster[0] is not None else cluster[1]
+    print(
+        "".join(emes), ':',
+        repr(word.encode("utf-8", errors='replace'))[2:-1] if word is not None else "?",
+        len(cluster)
+    )
+    for w in sorted(w for w in cluster if w is not None and w != word):
+        print('\t', repr(w.encode("utf-8", errors='replace'))[2:-1])
+    print('==========')
