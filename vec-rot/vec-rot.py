@@ -24,6 +24,7 @@ def diffs(keys):
             if w2 is None: continue
             yield (i, j, v, wv.vectors[j])
 
+used = set()
 def test_relation(i, j, v1, v2):
     d = v2 - v1
     n = np.linalg.norm(d)
@@ -38,9 +39,11 @@ def test_relation(i, j, v1, v2):
         # This e > 0.75 check feels backwards, but it seems to be critical
         # Why does filtering out results that are "too good" actually make the results better?
         # I haven't a single clue!
-        if w2 is None or e > 0.75 or w2 == w1: continue
+        if w2 is None or e > 0.75 or w2 == w1 or (w1, w2) in used: continue
         (w3, _) = wv.similar_by_vector(wv[w2] - r, topn=1)[0]
-        if w3 == w1: yield (w1,w2,e)
+        if w3 == w1:
+            used.add((w1,w2))
+            yield (w1,w2,e)
 
 model_file = sys.argv[1]
 wv = KeyedVectors.load_word2vec_format(model_file, binary=(model_file.endswith('.bin')))
